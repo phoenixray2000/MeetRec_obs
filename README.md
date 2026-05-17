@@ -22,7 +22,8 @@ It sits quietly in your system tray and is always ready with a single click or g
     -   **Clipboard Integration:** Automatically copies the file (or file path) to your clipboard.
     -   **Clean Workflow:** Option to move the file to a temp folder and copy it, keeping your desktop clean.
 -   **Control:**
-    -   **Global Hotkeys:** Start/Stop recording from anywhere (e.g., `Ctrl+Alt+R`).
+    -   **Global Hotkeys:** Start/stop recording from anywhere, including `Alt+Shift+<letter>` combinations.
+    -   **Notification Toggle:** Turn tray balloon notifications on or off from Settings.
     -   **Tray Icon:** Left-click to toggle recording immediately.
     -   **Visual Feedback:** Tray icon changes color when recording.
 
@@ -37,6 +38,8 @@ It sits quietly in your system tray and is always ready with a single click or g
 1.  **Right-click** the tray icon to open **Settings**.
 2.  Select your **Microphone** and **Output Folder**.
 3.  Set your **Hotkeys** (optional).
+    - Enable **Use record hotkeys to stop recording** if you want any record hotkey to stop the active recording.
+    - Disable **Show tray notifications** if you prefer silent tray operation.
 4.  **Left-click** the tray icon or use a hotkey to start recording.
 5.  Click again to stop. The file is saved and ready to use!
 
