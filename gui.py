@@ -32,6 +32,8 @@ class HotkeyEdit(QLineEdit):
     Maps Qt events to 'keyboard' library compatible strings.
     """
     CAPTURE_PROMPT = "Press shortcut..."
+    sequence_captured = pyqtSignal(str)
+    capture_cancelled = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -40,6 +42,15 @@ class HotkeyEdit(QLineEdit):
         self.current_sequence = None
         self.is_capturing = False
         self._previous_text = ""
+        self._keyboard_hook = None
+        self._modifier_scan_codes = {
+            "ctrl": set(),
+            "alt": set(),
+            "shift": set(),
+            "windows": set(),
+        }
+        self.sequence_captured.connect(self.finish_capture)
+        self.capture_cancelled.connect(self.cancel_capture)
 
     def begin_capture(self):
         if self.is_capturing:
@@ -49,8 +60,10 @@ class HotkeyEdit(QLineEdit):
         self.setText(self.CAPTURE_PROMPT)
         self.selectAll()
         self.setStyleSheet("color: #666;")
+        self.start_keyboard_capture()
 
     def finish_capture(self, sequence):
+        self.stop_keyboard_capture()
         self.is_capturing = False
         self.current_sequence = sequence or None
         self.setStyleSheet("")
@@ -58,6 +71,7 @@ class HotkeyEdit(QLineEdit):
         self.clearFocus()
 
     def cancel_capture(self):
+        self.stop_keyboard_capture()
         self.is_capturing = False
         self.setStyleSheet("")
         self.setText(self._previous_text)
@@ -75,9 +89,107 @@ class HotkeyEdit(QLineEdit):
     def focusOutEvent(self, event):
         if self.is_capturing:
             self.is_capturing = False
+            self.stop_keyboard_capture()
             self.setStyleSheet("")
             self.setText(self._previous_text)
         super().focusOutEvent(event)
+
+    def start_keyboard_capture(self):
+        if self._keyboard_hook is not None:
+            return
+        for scan_codes in self._modifier_scan_codes.values():
+            scan_codes.clear()
+        try:
+            self._keyboard_hook = keyboard.hook(self.handle_keyboard_hook)
+        except Exception as e:
+            print(f"Failed to start hotkey capture hook: {e}")
+
+    def stop_keyboard_capture(self):
+        if self._keyboard_hook is None:
+            return
+        try:
+            keyboard.unhook(self._keyboard_hook)
+        except Exception as e:
+            print(f"Failed to stop hotkey capture hook: {e}")
+        finally:
+            self._keyboard_hook = None
+            for scan_codes in self._modifier_scan_codes.values():
+                scan_codes.clear()
+
+    def handle_keyboard_hook(self, event):
+        if not self.is_capturing:
+            return
+
+        key_name = self.normalize_hook_key_name(event.name)
+        modifier = self.modifier_name_for_hook_key(key_name)
+        scan_code = event.scan_code
+
+        if modifier:
+            if event.event_type == "down":
+                self._modifier_scan_codes[modifier].add(scan_code)
+            elif event.event_type == "up":
+                self._modifier_scan_codes[modifier].discard(scan_code)
+            return
+
+        if event.event_type != "down":
+            return
+
+        if key_name in ("esc", "escape"):
+            self.capture_cancelled.emit()
+            return
+
+        if key_name in ("backspace", "delete"):
+            self.sequence_captured.emit("")
+            return
+
+        sequence = self.format_hook_hotkey(key_name)
+        if sequence:
+            self.sequence_captured.emit(sequence)
+
+    def normalize_hook_key_name(self, key_name):
+        key_name = (key_name or "").lower()
+        aliases = {
+            "left windows": "windows",
+            "right windows": "windows",
+            "win": "windows",
+            "cmd": "windows",
+            "+": "plus",
+            ",": "comma",
+            " ": "space",
+            "return": "enter",
+        }
+        return aliases.get(key_name, key_name)
+
+    def modifier_name_for_hook_key(self, key_name):
+        aliases = {
+            "ctrl": "ctrl",
+            "control": "ctrl",
+            "left ctrl": "ctrl",
+            "right ctrl": "ctrl",
+            "alt": "alt",
+            "left alt": "alt",
+            "right alt": "alt",
+            "shift": "shift",
+            "left shift": "shift",
+            "right shift": "shift",
+            "windows": "windows",
+            "left windows": "windows",
+            "right windows": "windows",
+        }
+        return aliases.get(key_name)
+
+    def format_hook_hotkey(self, key_name):
+        parts = []
+        for modifier in ("ctrl", "alt", "shift", "windows"):
+            if self._modifier_scan_codes[modifier]:
+                parts.append(modifier)
+
+        key_text = self.normalize_hook_key_name(key_name)
+        if not key_text or self.modifier_name_for_hook_key(key_text):
+            return ""
+
+        parts.append(key_text)
+        return "+".join(parts)
 
     def event(self, event):
         if event.type() == QEvent.Type.ShortcutOverride and self.is_capturing:

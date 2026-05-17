@@ -86,6 +86,24 @@ class HotkeyEditTests(unittest.TestCase):
 
         self.assertEqual(edit.text(), "alt+shift+r")
 
+    def test_keyboard_hook_captures_alt_shift_letter(self):
+        for alt_name in ("alt", "left alt", "right alt"):
+            with self.subTest(alt_name=alt_name):
+                edit = HotkeyEdit()
+                edit.is_capturing = True
+
+                edit.handle_keyboard_hook(
+                    SimpleNamespace(event_type="down", name=alt_name, scan_code=56)
+                )
+                edit.handle_keyboard_hook(
+                    SimpleNamespace(event_type="down", name="shift", scan_code=42)
+                )
+                edit.handle_keyboard_hook(
+                    SimpleNamespace(event_type="down", name="r", scan_code=19)
+                )
+
+                self.assertEqual(edit.text(), "alt+shift+r")
+
     def test_capture_prompt_is_visible_and_restores_on_escape(self):
         edit = HotkeyEdit()
         edit.setText("ctrl+alt+r")
