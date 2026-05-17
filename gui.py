@@ -217,6 +217,15 @@ class SettingsWindow(QMainWindow):
         group_tray.setLayout(layout_tray)
         layout.addWidget(group_tray)
 
+        # Notifications
+        group_notifications = QGroupBox("Notifications")
+        layout_notifications = QVBoxLayout()
+        self.chk_notifications = QCheckBox("Show tray notifications")
+        self.chk_notifications.setChecked(True)
+        layout_notifications.addWidget(self.chk_notifications)
+        group_notifications.setLayout(layout_notifications)
+        layout.addWidget(group_notifications)
+
         # Post-Processing
         group_post = QGroupBox("Post-Processing & Clipboard")
         layout_post = QVBoxLayout()
@@ -240,9 +249,14 @@ class SettingsWindow(QMainWindow):
         self.hk_loop = HotkeyEdit()
         self.hk_both = HotkeyEdit()
         self.hk_stop = HotkeyEdit()
+        self.chk_stop_with_record_hotkeys = QCheckBox("Use record hotkeys to stop recording")
+        self.chk_stop_with_record_hotkeys.setToolTip("When enabled, pressing any record hotkey while recording stops the active recording instead of starting another mode.")
+        self.chk_stop_with_record_hotkeys.setChecked(True)
+        self.chk_stop_with_record_hotkeys.toggled.connect(self.update_stop_hotkey_state)
         layout_hotkeys.addRow("Record Mic:", self.hk_mic)
         layout_hotkeys.addRow("Record Loopback:", self.hk_loop)
         layout_hotkeys.addRow("Record Both:", self.hk_both)
+        layout_hotkeys.addRow("", self.chk_stop_with_record_hotkeys)
         layout_hotkeys.addRow("Stop Recording:", self.hk_stop)
         group_hotkeys.setLayout(layout_hotkeys)
         layout.addWidget(group_hotkeys)
@@ -252,6 +266,15 @@ class SettingsWindow(QMainWindow):
         layout.addWidget(btn_save)
 
         self.refresh_devices()
+        self.update_stop_hotkey_state()
+
+    def update_stop_hotkey_state(self):
+        use_record_hotkeys = self.chk_stop_with_record_hotkeys.isChecked()
+        self.hk_stop.setEnabled(not use_record_hotkeys)
+        if use_record_hotkeys:
+            self.hk_stop.setPlaceholderText("Using record hotkeys")
+        else:
+            self.hk_stop.setPlaceholderText("Click to set hotkey...")
 
     def refresh_devices(self):
         self.combo_mic.clear()
@@ -275,7 +298,7 @@ class SettingsWindow(QMainWindow):
     def load_settings(self):
         if os.path.exists(CONFIG_FILE):
             try:
-                with open(CONFIG_FILE, 'r') as f:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     
                 self.lbl_folder.setText(data.get("output_folder", os.getcwd()))
@@ -295,6 +318,8 @@ class SettingsWindow(QMainWindow):
                 self.chk_clipboard.setChecked(data.get("clipboard", False))
                 self.chk_delete.setChecked(data.get("delete_after", False))
                 self.chk_delete.setEnabled(self.chk_clipboard.isChecked())
+                self.chk_notifications.setChecked(data.get("show_notifications", True))
+                self.chk_stop_with_record_hotkeys.setChecked(data.get("stop_with_record_hotkeys", True))
 
                 self.hk_mic.setText(data.get("hk_mic", ""))
                 self.hk_loop.setText(data.get("hk_loop", ""))
@@ -302,12 +327,13 @@ class SettingsWindow(QMainWindow):
                 self.hk_stop.setText(data.get("hk_stop", ""))
             except Exception as e:
                 print(f"Error loading settings: {e}")
+        self.update_stop_hotkey_state()
 
     def save_settings(self):
         data = self.get_settings()
         try:
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump(data, f)
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
             QMessageBox.information(self, "Settings", "Settings saved successfully.")
             self.settings_saved.emit()
         except Exception as e:
@@ -319,9 +345,11 @@ class SettingsWindow(QMainWindow):
             "output_folder": self.lbl_folder.text(),
             "format": self.combo_fmt.currentText(),
             "tray_click_mode": self.combo_left_click.currentText(),
+            "show_notifications": self.chk_notifications.isChecked(),
             "normalize": self.chk_normalize.isChecked(),
             "clipboard": self.chk_clipboard.isChecked(),
             "delete_after": self.chk_delete.isChecked(),
+            "stop_with_record_hotkeys": self.chk_stop_with_record_hotkeys.isChecked(),
             "hk_mic": self.hk_mic.text(),
             "hk_loop": self.hk_loop.text(),
             "hk_both": self.hk_both.text(),
