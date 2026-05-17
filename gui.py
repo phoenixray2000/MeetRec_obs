@@ -380,7 +380,7 @@ class TrayApplication(QObject):
         self.settings_window = SettingsWindow()
         self.settings_window.settings_saved.connect(self.register_hotkeys)
         
-        self.tray_icon.showMessage("Ready", "Left-click to toggle recording.", QSystemTrayIcon.MessageIcon.Information, 2000)
+        self.show_tray_notification("Ready", "Left-click to toggle recording.", QSystemTrayIcon.MessageIcon.Information, 2000)
         self.register_hotkeys()
 
     def generate_icons(self):
@@ -442,11 +442,32 @@ class TrayApplication(QObject):
         hk_both = settings.get("hk_both")
         hk_stop = settings.get("hk_stop")
         try:
-            if hk_mic: keyboard.add_hotkey(hk_mic, lambda: self.start_recording("mic"))
-            if hk_loop: keyboard.add_hotkey(hk_loop, lambda: self.start_recording("loopback"))
-            if hk_both: keyboard.add_hotkey(hk_both, lambda: self.start_recording("both"))
-            if hk_stop: keyboard.add_hotkey(hk_stop, self.stop_recording)
+            if hk_mic: keyboard.add_hotkey(hk_mic, lambda: self.toggle_recording("mic"))
+            if hk_loop: keyboard.add_hotkey(hk_loop, lambda: self.toggle_recording("loopback"))
+            if hk_both: keyboard.add_hotkey(hk_both, lambda: self.toggle_recording("both"))
+            if hk_stop and not settings.get("stop_with_record_hotkeys", True):
+                keyboard.add_hotkey(hk_stop, self.stop_recording)
         except Exception as e: print(f"Failed to register hotkeys: {e}")
+
+    def notifications_enabled(self):
+        try:
+            return self.settings_window.get_settings().get("show_notifications", True)
+        except Exception:
+            return True
+
+    def show_tray_notification(self, title, message, icon=QSystemTrayIcon.MessageIcon.Information, duration=2000):
+        notifications_enabled = getattr(self, "notifications_enabled", lambda: TrayApplication.notifications_enabled(self))
+        if notifications_enabled():
+            self.tray_icon.showMessage(title, message, icon, duration)
+
+    def toggle_recording(self, mode="mic"):
+        if self.recorder and self.recorder.is_alive():
+            settings = self.settings_window.get_settings()
+            if settings.get("stop_with_record_hotkeys", True):
+                self.stop_recording()
+            return
+
+        self.start_recording(mode)
 
     def on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -490,7 +511,7 @@ class TrayApplication(QObject):
         self.action_stop.setEnabled(True)
         self.tray_icon.setIcon(QIcon(self.icon_rec_path)) 
         self.tray_icon.setToolTip(f"Recording ({mode})...")
-        self.tray_icon.showMessage("Started", f"Recording {mode}", QSystemTrayIcon.MessageIcon.NoIcon, 1000)
+        self.show_tray_notification("Started", f"Recording {mode}", QSystemTrayIcon.MessageIcon.NoIcon, 1000)
 
     def stop_recording(self):
         if self.recorder: self.recorder.stop()
@@ -505,7 +526,7 @@ class TrayApplication(QObject):
         self.recorder = None
         
         if error:
-            self.tray_icon.showMessage("Error", f"Recording failed: {error}", QSystemTrayIcon.MessageIcon.Critical, 4000)
+            self.show_tray_notification("Error", f"Recording failed: {error}", QSystemTrayIcon.MessageIcon.Critical, 4000)
             return
             
         settings = self.settings_window.get_settings()
@@ -538,7 +559,7 @@ class TrayApplication(QObject):
             except Exception as e:
                 msg += f"\nClipboard/Move error: {e}"
 
-        self.tray_icon.showMessage("Finished", msg, QSystemTrayIcon.MessageIcon.Information, 2000)
+        self.show_tray_notification("Finished", msg, QSystemTrayIcon.MessageIcon.Information, 2000)
 
     def exit_app(self):
         if self.recorder: self.recorder.stop()
