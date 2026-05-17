@@ -56,6 +56,36 @@ class HotkeyEditTests(unittest.TestCase):
 
         self.assertEqual(edit.text(), "alt+shift+r")
 
+    def test_shortcut_override_alt_shift_letter_is_captured(self):
+        edit = HotkeyEdit()
+        edit.begin_capture()
+
+        event = QKeyEvent(
+            QEvent.Type.ShortcutOverride,
+            Qt.Key.Key_R.value,
+            Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.ShiftModifier,
+        )
+        QApplication.sendEvent(edit, event)
+
+        self.assertEqual(edit.text(), "alt+shift+r")
+        self.assertTrue(event.isAccepted())
+
+    def test_native_virtual_key_fallback_captures_letter(self):
+        edit = HotkeyEdit()
+        edit.begin_capture()
+
+        event = QKeyEvent(
+            QEvent.Type.KeyPress,
+            Qt.Key.Key_unknown.value,
+            Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.ShiftModifier,
+            0,
+            ord("R"),
+            0,
+        )
+        edit.keyPressEvent(event)
+
+        self.assertEqual(edit.text(), "alt+shift+r")
+
     def test_capture_prompt_is_visible_and_restores_on_escape(self):
         edit = HotkeyEdit()
         edit.setText("ctrl+alt+r")

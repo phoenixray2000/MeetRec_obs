@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QMainWindow,
                              QPushButton, QFileDialog, QMessageBox, QGroupBox, 
                              QLineEdit, QFormLayout, QCheckBox)
 from PyQt6.QtGui import QIcon, QAction, QColor, QPixmap, QPainter, QBrush, QKeySequence
-from PyQt6.QtCore import pyqtSignal, QObject, Qt, QUrl, QMimeData, QDir
+from PyQt6.QtCore import pyqtSignal, QObject, Qt, QUrl, QMimeData, QDir, QEvent
 import soundcard as sc
 import keyboard
 from audio_recorder import AudioRecorder, get_devices
@@ -79,8 +79,18 @@ class HotkeyEdit(QLineEdit):
             self.setText(self._previous_text)
         super().focusOutEvent(event)
 
+    def event(self, event):
+        if event.type() == QEvent.Type.ShortcutOverride and self.is_capturing:
+            self.handle_hotkey_event(event)
+            event.accept()
+            return True
+        return super().event(event)
+
     def keyPressEvent(self, event):
-        key = event.key()
+        self.handle_hotkey_event(event)
+
+    def handle_hotkey_event(self, event):
+        key = self.key_from_event(event)
         modifiers = event.modifiers()
 
         if key in (Qt.Key.Key_Backspace.value, Qt.Key.Key_Delete.value):
@@ -102,6 +112,12 @@ class HotkeyEdit(QLineEdit):
         final_hotkey = self.format_hotkey(key, modifiers)
         if final_hotkey:
             self.finish_capture(final_hotkey)
+
+    def key_from_event(self, event):
+        key = event.key()
+        if key == Qt.Key.Key_unknown.value and event.nativeVirtualKey():
+            return event.nativeVirtualKey()
+        return key
 
     def format_hotkey(self, key, modifiers):
         parts = []
