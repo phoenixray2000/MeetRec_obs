@@ -115,8 +115,10 @@ class HotkeyEdit(QLineEdit):
             parts.append("windows")
 
         key_text = self.key_to_text(key)
-        if key_text:
-            parts.append(key_text)
+        if not key_text:
+            return ""
+
+        parts.append(key_text)
 
         return "+".join(parts)
 
@@ -145,6 +147,8 @@ class HotkeyEdit(QLineEdit):
             Qt.Key.Key_Up.value: "up",
             Qt.Key.Key_Down.value: "down",
             Qt.Key.Key_Space.value: "space",
+            Qt.Key.Key_Plus.value: "plus",
+            Qt.Key.Key_Comma.value: "comma",
             Qt.Key.Key_Tab.value: "tab",
             Qt.Key.Key_Return.value: "enter",
             Qt.Key.Key_Enter.value: "enter",
@@ -159,7 +163,13 @@ class HotkeyEdit(QLineEdit):
             Qt.Key.Key_Print.value: "print_screen",
             Qt.Key.Key_Pause.value: "pause",
         }
-        return key_map.get(key, "")
+        if key in key_map:
+            return key_map[key]
+
+        if 0x20 <= key <= 0x7E:
+            return chr(key).lower()
+
+        return ""
 
 class SettingsWindow(QMainWindow):
     settings_saved = pyqtSignal()
@@ -319,7 +329,10 @@ class SettingsWindow(QMainWindow):
                 self.chk_delete.setChecked(data.get("delete_after", False))
                 self.chk_delete.setEnabled(self.chk_clipboard.isChecked())
                 self.chk_notifications.setChecked(data.get("show_notifications", True))
-                self.chk_stop_with_record_hotkeys.setChecked(data.get("stop_with_record_hotkeys", True))
+                stop_with_record_hotkeys = data.get("stop_with_record_hotkeys")
+                if stop_with_record_hotkeys is None:
+                    stop_with_record_hotkeys = not bool(data.get("hk_stop", ""))
+                self.chk_stop_with_record_hotkeys.setChecked(stop_with_record_hotkeys)
 
                 self.hk_mic.setText(data.get("hk_mic", ""))
                 self.hk_loop.setText(data.get("hk_loop", ""))

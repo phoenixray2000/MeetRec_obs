@@ -1,6 +1,9 @@
 import os
+import json
+import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -8,7 +11,7 @@ from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import QApplication
 
-from gui import HotkeyEdit, TrayApplication
+from gui import HotkeyEdit, SettingsWindow, TrayApplication
 
 
 class FakeRecorder:
@@ -82,6 +85,116 @@ class HotkeyEditTests(unittest.TestCase):
         edit.keyPressEvent(event)
 
         self.assertEqual(edit.text(), "")
+
+    def test_punctuation_hotkeys_are_captured(self):
+        cases = (
+            (Qt.Key.Key_Minus.value, "ctrl+alt+-"),
+            (Qt.Key.Key_Slash.value, "ctrl+alt+/"),
+        )
+
+        for key, expected in cases:
+            with self.subTest(expected=expected):
+                edit = HotkeyEdit()
+                edit.begin_capture()
+
+                event = QKeyEvent(
+                    QEvent.Type.KeyPress,
+                    key,
+                    Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier,
+                )
+                edit.keyPressEvent(event)
+
+                self.assertEqual(edit.text(), expected)
+
+    def test_hotkey_separator_punctuation_uses_keyboard_names(self):
+        cases = (
+            (Qt.Key.Key_Plus.value, "ctrl+alt+plus"),
+            (Qt.Key.Key_Comma.value, "ctrl+alt+comma"),
+        )
+
+        for key, expected in cases:
+            with self.subTest(expected=expected):
+                edit = HotkeyEdit()
+                edit.begin_capture()
+
+                event = QKeyEvent(
+                    QEvent.Type.KeyPress,
+                    key,
+                    Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier,
+                )
+                edit.keyPressEvent(event)
+
+                self.assertEqual(edit.text(), expected)
+
+    def test_modifier_only_unknown_key_is_ignored(self):
+        edit = HotkeyEdit()
+
+        self.assertEqual(
+            edit.format_hotkey(
+                0,
+                Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier,
+            ),
+            "",
+        )
+
+
+class SettingsWindowLegacyHotkeyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def make_settings_window(self, settings):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        previous_cwd = os.getcwd()
+        os.chdir(temp_dir.name)
+        self.addCleanup(os.chdir, previous_cwd)
+
+        with open("settings.json", "w", encoding="utf-8") as f:
+            json.dump(settings, f)
+
+        patches = [
+            patch("gui.get_devices", return_value=[{"name": "Default Mic", "id": "mic1"}]),
+            patch("gui.sc.default_microphone", return_value=SimpleNamespace(id="mic1")),
+        ]
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        window = SettingsWindow()
+        self.addCleanup(window.close)
+        return window
+
+    def test_legacy_stop_hotkey_keeps_dedicated_stop_enabled(self):
+        window = self.make_settings_window({"hk_stop": "ctrl+alt+s"})
+
+        self.assertFalse(window.chk_stop_with_record_hotkeys.isChecked())
+        self.assertTrue(window.hk_stop.isEnabled())
+        self.assertEqual(window.hk_stop.text(), "ctrl+alt+s")
+
+    def test_legacy_settings_without_stop_hotkey_use_record_hotkeys_to_stop(self):
+        window = self.make_settings_window({})
+
+        self.assertTrue(window.chk_stop_with_record_hotkeys.isChecked())
+        self.assertFalse(window.hk_stop.isEnabled())
+
+    def test_explicit_stop_with_record_hotkeys_true_overrides_legacy_stop_hotkey(self):
+        window = self.make_settings_window(
+            {"hk_stop": "ctrl+alt+s", "stop_with_record_hotkeys": True}
+        )
+
+        self.assertTrue(window.chk_stop_with_record_hotkeys.isChecked())
+        self.assertFalse(window.hk_stop.isEnabled())
+        self.assertEqual(window.hk_stop.text(), "ctrl+alt+s")
+
+    def test_explicit_stop_with_record_hotkeys_false_keeps_dedicated_stop_enabled(self):
+        window = self.make_settings_window(
+            {"hk_stop": "ctrl+alt+s", "stop_with_record_hotkeys": False}
+        )
+
+        self.assertFalse(window.chk_stop_with_record_hotkeys.isChecked())
+        self.assertTrue(window.hk_stop.isEnabled())
+        self.assertEqual(window.hk_stop.text(), "ctrl+alt+s")
 
 
 class TrayApplicationHotkeyTests(unittest.TestCase):
