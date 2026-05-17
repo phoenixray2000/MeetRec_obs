@@ -31,65 +31,135 @@ class HotkeyEdit(QLineEdit):
     Custom widget to capture hotkeys by pressing them.
     Maps Qt events to 'keyboard' library compatible strings.
     """
+    CAPTURE_PROMPT = "Press shortcut..."
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setPlaceholderText("Click to set hotkey...")
-        self.setReadOnly(True) 
+        self.setReadOnly(True)
         self.current_sequence = None
+        self.is_capturing = False
+        self._previous_text = ""
+
+    def begin_capture(self):
+        if self.is_capturing:
+            return
+        self.is_capturing = True
+        self._previous_text = self.text()
+        self.setText(self.CAPTURE_PROMPT)
+        self.selectAll()
+        self.setStyleSheet("color: #666;")
+
+    def finish_capture(self, sequence):
+        self.is_capturing = False
+        self.current_sequence = sequence or None
+        self.setStyleSheet("")
+        self.setText(sequence)
+        self.clearFocus()
+
+    def cancel_capture(self):
+        self.is_capturing = False
+        self.setStyleSheet("")
+        self.setText(self._previous_text)
+        self.clearFocus()
 
     def mousePressEvent(self, event):
         self.setFocus()
+        self.begin_capture()
         super().mousePressEvent(event)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self.begin_capture()
+
+    def focusOutEvent(self, event):
+        if self.is_capturing:
+            self.is_capturing = False
+            self.setStyleSheet("")
+            self.setText(self._previous_text)
+        super().focusOutEvent(event)
 
     def keyPressEvent(self, event):
         key = event.key()
         modifiers = event.modifiers()
-        
-        if key == Qt.Key.Key_Backspace or key == Qt.Key.Key_Delete:
-            self.clear()
-            self.current_sequence = None
-            return
-            
-        if key == Qt.Key.Key_Escape:
-            self.clearFocus()
+
+        if key in (Qt.Key.Key_Backspace.value, Qt.Key.Key_Delete.value):
+            self.finish_capture("")
             return
 
-        if key in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+        if key == Qt.Key.Key_Escape.value:
+            self.cancel_capture()
             return
 
+        if key in (
+            Qt.Key.Key_Control.value,
+            Qt.Key.Key_Shift.value,
+            Qt.Key.Key_Alt.value,
+            Qt.Key.Key_Meta.value,
+        ):
+            return
+
+        final_hotkey = self.format_hotkey(key, modifiers)
+        if final_hotkey:
+            self.finish_capture(final_hotkey)
+
+    def format_hotkey(self, key, modifiers):
         parts = []
-        if modifiers & Qt.KeyboardModifier.ControlModifier: parts.append("ctrl")
-        if modifiers & Qt.KeyboardModifier.ShiftModifier:   parts.append("shift")
-        if modifiers & Qt.KeyboardModifier.AltModifier:     parts.append("alt")
-        if modifiers & Qt.KeyboardModifier.MetaModifier:    parts.append("windows")
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            parts.append("ctrl")
+        if modifiers & Qt.KeyboardModifier.AltModifier:
+            parts.append("alt")
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+            parts.append("shift")
+        if modifiers & Qt.KeyboardModifier.MetaModifier:
+            parts.append("windows")
 
-        key_text = ""
-        if key >= 0x20 and key <= 0x7E:
-            key_text = chr(key).lower()
-        else:
-            key_map = {
-                Qt.Key.Key_F1: "f1", Qt.Key.Key_F2: "f2", Qt.Key.Key_F3: "f3", Qt.Key.Key_F4: "f4",
-                Qt.Key.Key_F5: "f5", Qt.Key.Key_F6: "f6", Qt.Key.Key_F7: "f7", Qt.Key.Key_F8: "f8",
-                Qt.Key.Key_F9: "f9", Qt.Key.Key_F10: "f10", Qt.Key.Key_F11: "f11", Qt.Key.Key_F12: "f12",
-                Qt.Key.Key_Left: "left", Qt.Key.Key_Right: "right", Qt.Key.Key_Up: "up", Qt.Key.Key_Down: "down",
-                Qt.Key.Key_Space: "space", Qt.Key.Key_Tab: "tab", Qt.Key.Key_Return: "enter", Qt.Key.Key_Enter: "enter",
-                Qt.Key.Key_Backspace: "backspace", Qt.Key.Key_Delete: "delete", Qt.Key.Key_Insert: "insert",
-                Qt.Key.Key_Home: "home", Qt.Key.Key_End: "end", Qt.Key.Key_PageUp: "pageup", Qt.Key.Key_PageDown: "pagedown",
-                Qt.Key.Key_CapsLock: "capslock", Qt.Key.Key_NumLock: "numlock", Qt.Key.Key_ScrollLock: "scrolllock",
-                Qt.Key.Key_Print: "print_screen", Qt.Key.Key_Pause: "pause"
-            }
-            key_text = key_map.get(key)
-            if not key_text:
-                try: key_text = QKeySequence(key).toString().lower()
-                except: pass
-
+        key_text = self.key_to_text(key)
         if key_text:
             parts.append(key_text)
-            
-        final_hotkey = "+".join(parts)
-        self.setText(final_hotkey)
-        self.current_sequence = final_hotkey
-        self.clearFocus()
+
+        return "+".join(parts)
+
+    def key_to_text(self, key):
+        if Qt.Key.Key_A.value <= key <= Qt.Key.Key_Z.value:
+            return chr(key).lower()
+
+        if Qt.Key.Key_0.value <= key <= Qt.Key.Key_9.value:
+            return chr(key)
+
+        key_map = {
+            Qt.Key.Key_F1.value: "f1",
+            Qt.Key.Key_F2.value: "f2",
+            Qt.Key.Key_F3.value: "f3",
+            Qt.Key.Key_F4.value: "f4",
+            Qt.Key.Key_F5.value: "f5",
+            Qt.Key.Key_F6.value: "f6",
+            Qt.Key.Key_F7.value: "f7",
+            Qt.Key.Key_F8.value: "f8",
+            Qt.Key.Key_F9.value: "f9",
+            Qt.Key.Key_F10.value: "f10",
+            Qt.Key.Key_F11.value: "f11",
+            Qt.Key.Key_F12.value: "f12",
+            Qt.Key.Key_Left.value: "left",
+            Qt.Key.Key_Right.value: "right",
+            Qt.Key.Key_Up.value: "up",
+            Qt.Key.Key_Down.value: "down",
+            Qt.Key.Key_Space.value: "space",
+            Qt.Key.Key_Tab.value: "tab",
+            Qt.Key.Key_Return.value: "enter",
+            Qt.Key.Key_Enter.value: "enter",
+            Qt.Key.Key_Insert.value: "insert",
+            Qt.Key.Key_Home.value: "home",
+            Qt.Key.Key_End.value: "end",
+            Qt.Key.Key_PageUp.value: "pageup",
+            Qt.Key.Key_PageDown.value: "pagedown",
+            Qt.Key.Key_CapsLock.value: "capslock",
+            Qt.Key.Key_NumLock.value: "numlock",
+            Qt.Key.Key_ScrollLock.value: "scrolllock",
+            Qt.Key.Key_Print.value: "print_screen",
+            Qt.Key.Key_Pause.value: "pause",
+        }
+        return key_map.get(key, "")
 
 class SettingsWindow(QMainWindow):
     settings_saved = pyqtSignal()
