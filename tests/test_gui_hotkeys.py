@@ -104,6 +104,31 @@ class HotkeyEditTests(unittest.TestCase):
 
                 self.assertEqual(edit.text(), "alt+shift+r")
 
+    def test_keyboard_hook_captures_physical_alt_when_ctrl_alt_are_swapped(self):
+        cases = (
+            ("ctrl", 56, "alt+shift+r"),
+            ("alt", 29, "ctrl+shift+r"),
+        )
+
+        for mapped_name, scan_code, expected in cases:
+            with self.subTest(mapped_name=mapped_name, scan_code=scan_code):
+                edit = HotkeyEdit()
+                edit.is_capturing = True
+
+                edit.handle_keyboard_hook(
+                    SimpleNamespace(
+                        event_type="down", name=mapped_name, scan_code=scan_code
+                    )
+                )
+                edit.handle_keyboard_hook(
+                    SimpleNamespace(event_type="down", name="shift", scan_code=42)
+                )
+                edit.handle_keyboard_hook(
+                    SimpleNamespace(event_type="down", name="r", scan_code=19)
+                )
+
+                self.assertEqual(edit.text(), expected)
+
     def test_capture_prompt_is_visible_and_restores_on_escape(self):
         edit = HotkeyEdit()
         edit.setText("ctrl+alt+r")

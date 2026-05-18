@@ -49,6 +49,7 @@ class HotkeyEdit(QLineEdit):
             "shift": set(),
             "windows": set(),
         }
+        self._modifier_names_by_scan_code = self.build_modifier_scan_code_lookup()
         self.sequence_captured.connect(self.finish_capture)
         self.capture_cancelled.connect(self.cancel_capture)
 
@@ -121,7 +122,7 @@ class HotkeyEdit(QLineEdit):
             return
 
         key_name = self.normalize_hook_key_name(event.name)
-        modifier = self.modifier_name_for_hook_key(key_name)
+        modifier = self.modifier_name_for_hook_event(key_name, event.scan_code)
         scan_code = event.scan_code
 
         if modifier:
@@ -177,6 +178,31 @@ class HotkeyEdit(QLineEdit):
             "right windows": "windows",
         }
         return aliases.get(key_name)
+
+    def modifier_name_for_hook_event(self, key_name, scan_code):
+        if scan_code in self._modifier_names_by_scan_code:
+            return self._modifier_names_by_scan_code[scan_code]
+        return self.modifier_name_for_hook_key(key_name)
+
+    def build_modifier_scan_code_lookup(self):
+        lookup = {}
+        modifier_names = {
+            "ctrl": ("ctrl", "control", "left ctrl", "right ctrl"),
+            "alt": ("alt", "left alt", "right alt"),
+            "shift": ("shift", "left shift", "right shift"),
+            "windows": ("windows", "left windows", "right windows"),
+        }
+
+        for modifier, names in modifier_names.items():
+            for name in names:
+                try:
+                    scan_codes = keyboard.key_to_scan_codes(name, False)
+                except Exception:
+                    scan_codes = ()
+                for scan_code in scan_codes:
+                    lookup[scan_code] = modifier
+
+        return lookup
 
     def format_hook_hotkey(self, key_name):
         parts = []
