@@ -28,8 +28,8 @@ It sits quietly in your system tray and is always ready with a single click or g
 -   **Control:**
     -   **Global Hotkeys:** Start/stop recording from anywhere, including `Alt+Shift+<letter>` combinations.
     -   **Notification Toggle:** Turn tray balloon notifications on or off from Settings.
-    -   **Tray Icon:** Left-click to toggle recording immediately.
-    -   **Visual Feedback:** Tray icon changes color when recording.
+    -   **Tray Icon:** Left-click to toggle recording immediately; right-click to open the recordings folder, settings, or exit.
+    -   **Visual Feedback:** Tray icon changes color when recording, and an optional always-on-top floating timer shows recording status with the same right-click menu.
 
 ## Installation
 
@@ -44,8 +44,9 @@ It sits quietly in your system tray and is always ready with a single click or g
 3.  Set your **Hotkeys** (optional).
     - Enable **Use record hotkeys to stop recording** if you want any record hotkey to stop the active recording.
     - Disable **Show tray notifications** if you prefer silent tray operation.
+    - Disable **Show floating recording timer** if you do not want the compact always-on-top recording indicator.
 4.  **Left-click** the tray icon or use a hotkey to start recording.
-5.  Click again to stop. The file is saved and ready to use!
+5.  Click the tray icon again, use a stop hotkey, or click the floating timer to stop. The floating timer changes state immediately, then hides after 5 seconds; click it again before it hides to open the recordings folder.
 
 ## Development
 
