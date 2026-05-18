@@ -8,6 +8,78 @@ import numpy as np
 import tempfile
 import shutil
 
+FORMAT_CONFIG = {
+    "wav": {
+        "label": "WAV",
+        "extension": ".wav",
+        "encoder": "soundfile",
+        "format": "WAV",
+    },
+    "flac": {
+        "label": "FLAC",
+        "extension": ".flac",
+        "encoder": "soundfile",
+        "format": "FLAC",
+    },
+    "mp3": {
+        "label": "MP3",
+        "extension": ".mp3",
+        "encoder": "lameenc",
+    },
+}
+
+QUALITY_CONFIG = {
+    "balanced": {
+        "label": "Balanced",
+        "sample_rate": 16000,
+        "subtype": "PCM_16",
+        "mp3_bitrate_kbps": 64,
+    },
+    "high": {
+        "label": "High Quality",
+        "sample_rate": 48000,
+        "subtype": "PCM_24",
+        "mp3_bitrate_kbps": 128,
+    },
+}
+
+
+def build_output_profile(fmt, quality, stereo):
+    fmt_key = str(fmt or "").strip().lower()
+    quality_key = str(quality or "").strip().lower()
+
+    if fmt_key not in FORMAT_CONFIG:
+        raise ValueError(f"Unsupported output format: {fmt}")
+    if quality_key not in QUALITY_CONFIG:
+        raise ValueError(f"Unsupported output quality: {quality}")
+
+    format_config = FORMAT_CONFIG[fmt_key]
+    quality_config = QUALITY_CONFIG[quality_key]
+    channels = 2 if stereo else 1
+    return {
+        **quality_config,
+        **format_config,
+        "label": format_config["label"],
+        "format_label": format_config["label"],
+        "quality_label": quality_config["label"],
+        "format_key": fmt_key,
+        "quality_key": quality_key,
+        "channels": channels,
+    }
+
+
+def describe_output_profile(fmt, quality, stereo):
+    profile = build_output_profile(fmt, quality, stereo)
+    rate_khz = profile["sample_rate"] // 1000
+    channels = "stereo" if profile["channels"] == 2 else "mono"
+    encoding = (
+        f"{profile['mp3_bitrate_kbps']} kbps"
+        if profile["encoder"] == "lameenc"
+        else profile["subtype"]
+    )
+    return f"{profile['format_label']} / {rate_khz} kHz / {channels} / {encoding}"
+
+
 class RawRecorder(threading.Thread):
     """
     Helper thread to record a single device to a WAV file.
