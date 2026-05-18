@@ -22,7 +22,7 @@ It sits quietly in your system tray and is always ready with a single click or g
     -   **Quality:** Choose Balanced for compact 16 kHz output or High Quality for 48 kHz output.
     -   **Stereo:** Keep stereo channels when needed, or leave it off for mono recordings.
 -   **Post-Processing:**
-    -   **Auto-Normalize:** Automatically adjusts volume to optimal levels after recording.
+    -   **Auto-Normalize:** Lifts the main voice/body of each source before mixing and limits sharp peaks so brief spikes do not bury the recording.
     -   **Clipboard Integration:** Automatically copies the file (or file path) to your clipboard.
     -   **Clean Workflow:** Option to move the file to a temp folder and copy it, keeping your desktop clean.
 -   **Control:**
