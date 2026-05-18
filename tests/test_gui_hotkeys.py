@@ -11,7 +11,13 @@ from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import QApplication
 
-from gui import HotkeyEdit, SettingsWindow, TrayApplication, parse_windows_hotkey
+from gui import (
+    HotkeyEdit,
+    SettingsWindow,
+    TrayApplication,
+    WindowsLowLevelHotkeyManager,
+    parse_windows_hotkey,
+)
 
 
 class FakeRecorder:
@@ -242,6 +248,45 @@ class WindowsHotkeyParserTests(unittest.TestCase):
 
     def test_parse_unknown_key_returns_none(self):
         self.assertIsNone(parse_windows_hotkey("alt+shift+unknown-key"))
+
+
+class WindowsLowLevelHotkeyManagerTests(unittest.TestCase):
+    def test_alt_shift_letter_triggers_from_low_level_events(self):
+        manager = WindowsLowLevelHotkeyManager(install_hook=False)
+        calls = []
+        manager.register("alt+shift+r", lambda: calls.append("mic"))
+
+        manager.process_key_event(0x0104, 0xA4)
+        manager.process_key_event(0x0100, 0xA0)
+        manager.process_key_event(0x0100, 0x52)
+
+        self.assertEqual(calls, ["mic"])
+
+    def test_repeated_keydown_does_not_repeat_until_keyup(self):
+        manager = WindowsLowLevelHotkeyManager(install_hook=False)
+        calls = []
+        manager.register("alt+shift+r", lambda: calls.append("mic"))
+
+        manager.process_key_event(0x0104, 0xA4)
+        manager.process_key_event(0x0100, 0xA0)
+        manager.process_key_event(0x0100, 0x52)
+        manager.process_key_event(0x0100, 0x52)
+        manager.process_key_event(0x0101, 0x52)
+        manager.process_key_event(0x0100, 0x52)
+
+        self.assertEqual(calls, ["mic", "mic"])
+
+    def test_clear_removes_low_level_registrations(self):
+        manager = WindowsLowLevelHotkeyManager(install_hook=False)
+        calls = []
+        manager.register("alt+shift+r", lambda: calls.append("mic"))
+
+        manager.clear()
+        manager.process_key_event(0x0104, 0xA4)
+        manager.process_key_event(0x0100, 0xA0)
+        manager.process_key_event(0x0100, 0x52)
+
+        self.assertEqual(calls, [])
 
 
 class SettingsWindowLegacyHotkeyTests(unittest.TestCase):

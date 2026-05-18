@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QMainWindow,
                              QPushButton, QFileDialog, QMessageBox, QGroupBox, 
                              QLineEdit, QFormLayout, QCheckBox)
 from PyQt6.QtGui import QIcon, QAction, QColor, QPixmap, QPainter, QBrush, QKeySequence
-from PyQt6.QtCore import pyqtSignal, QObject, Qt, QUrl, QMimeData, QDir, QEvent, QAbstractNativeEventFilter
+from PyQt6.QtCore import pyqtSignal, QObject, Qt, QUrl, QMimeData, QDir, QEvent
 import soundcard as sc
 import keyboard
 from audio_recorder import AudioRecorder, get_devices
@@ -90,81 +90,164 @@ def parse_windows_hotkey(hotkey):
 
     return modifiers, virtual_key
 
-class MSG(ctypes.Structure):
+class KBDLLHOOKSTRUCT(ctypes.Structure):
     _fields_ = [
-        ("hwnd", wintypes.HWND),
-        ("message", wintypes.UINT),
-        ("wParam", wintypes.WPARAM),
-        ("lParam", wintypes.LPARAM),
+        ("vkCode", wintypes.DWORD),
+        ("scanCode", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
         ("time", wintypes.DWORD),
-        ("pt", wintypes.POINT),
+        ("dwExtraInfo", ctypes.c_void_p),
     ]
+
+LowLevelKeyboardProc = ctypes.WINFUNCTYPE(
+    wintypes.LPARAM, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
+)
 
 class KeyboardHotkeyManager:
     def clear(self):
-        keyboard.unhook_all_hotkeys()
+        try:
+            keyboard.unhook_all_hotkeys()
+        except Exception:
+            pass
 
     def register(self, hotkey, callback):
         keyboard.add_hotkey(hotkey, callback)
         return True
 
-class WindowsNativeHotkeyManager(QAbstractNativeEventFilter):
-    WM_HOTKEY = 0x0312
-    MOD_NOREPEAT = 0x4000
+class WindowsLowLevelHotkeyManager:
+    WH_KEYBOARD_LL = 13
+    WM_KEYDOWN = 0x0100
+    WM_KEYUP = 0x0101
+    WM_SYSKEYDOWN = 0x0104
+    WM_SYSKEYUP = 0x0105
+    KEY_DOWN_MESSAGES = {WM_KEYDOWN, WM_SYSKEYDOWN}
+    KEY_UP_MESSAGES = {WM_KEYUP, WM_SYSKEYUP}
+    VK_TO_MODIFIER = {
+        0x10: WINDOWS_MODIFIER_KEYS["shift"],
+        0xA0: WINDOWS_MODIFIER_KEYS["shift"],
+        0xA1: WINDOWS_MODIFIER_KEYS["shift"],
+        0x11: WINDOWS_MODIFIER_KEYS["ctrl"],
+        0xA2: WINDOWS_MODIFIER_KEYS["ctrl"],
+        0xA3: WINDOWS_MODIFIER_KEYS["ctrl"],
+        0x12: WINDOWS_MODIFIER_KEYS["alt"],
+        0xA4: WINDOWS_MODIFIER_KEYS["alt"],
+        0xA5: WINDOWS_MODIFIER_KEYS["alt"],
+        0x5B: WINDOWS_MODIFIER_KEYS["windows"],
+        0x5C: WINDOWS_MODIFIER_KEYS["windows"],
+    }
 
-    def __init__(self, app, fallback=None):
-        super().__init__()
-        self.app = app
+    def __init__(self, install_hook=True, fallback=None):
         self.fallback = fallback or KeyboardHotkeyManager()
         self.callbacks = {}
-        self.next_id = 1
-        self.user32 = ctypes.windll.user32 if sys.platform == "win32" else None
-        if self.user32 is not None:
-            self.app.installNativeEventFilter(self)
+        self.active_modifiers = 0
+        self.active_hotkeys = set()
+        self.hook = None
+        self.user32 = None
+        self.kernel32 = None
+        self.hook_callback = None
+        if sys.platform == "win32":
+            self.user32 = ctypes.WinDLL("user32", use_last_error=True)
+            self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            self.configure_api()
+            self.hook_callback = LowLevelKeyboardProc(self.low_level_keyboard_proc)
+            if install_hook:
+                self.install_hook()
+
+    def configure_api(self):
+        self.user32.SetWindowsHookExW.argtypes = [
+            ctypes.c_int,
+            LowLevelKeyboardProc,
+            wintypes.HINSTANCE,
+            wintypes.DWORD,
+        ]
+        self.user32.SetWindowsHookExW.restype = wintypes.HHOOK
+        self.user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+        self.user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+        self.user32.CallNextHookEx.argtypes = [
+            wintypes.HHOOK,
+            ctypes.c_int,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        self.user32.CallNextHookEx.restype = wintypes.LPARAM
+        self.kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+        self.kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+
+    def install_hook(self):
+        if self.user32 is None or self.hook:
+            return bool(self.hook)
+
+        self.hook = self.user32.SetWindowsHookExW(
+            self.WH_KEYBOARD_LL,
+            self.hook_callback,
+            self.kernel32.GetModuleHandleW(None),
+            0,
+        )
+        if not self.hook:
+            print(f"Failed to install low-level hotkey hook: {ctypes.get_last_error()}")
+        return bool(self.hook)
 
     def clear(self):
-        if self.user32 is not None:
-            for hotkey_id in list(self.callbacks):
-                self.user32.UnregisterHotKey(None, hotkey_id)
-            self.callbacks.clear()
-        self.fallback.clear()
+        self.callbacks.clear()
+        self.active_modifiers = 0
+        self.active_hotkeys.clear()
+        try:
+            self.fallback.clear()
+        except Exception as e:
+            print(f"Failed to clear fallback hotkeys: {e}")
 
     def register(self, hotkey, callback):
         parsed = parse_windows_hotkey(hotkey)
-        if self.user32 is None or parsed is None:
+        if parsed is None:
             return self.fallback.register(hotkey, callback)
 
-        modifiers, virtual_key = parsed
-        hotkey_id = self.next_id
-        self.next_id += 1
+        if self.user32 is not None and not self.install_hook():
+            return self.fallback.register(hotkey, callback)
 
-        registered = self.user32.RegisterHotKey(
-            None,
-            hotkey_id,
-            modifiers | self.MOD_NOREPEAT,
-            virtual_key,
-        )
-        if registered:
-            self.callbacks[hotkey_id] = callback
-            return True
+        self.callbacks.setdefault(parsed, []).append(callback)
+        return True
 
-        return self.fallback.register(hotkey, callback)
-
-    def nativeEventFilter(self, event_type, message):
+    def low_level_keyboard_proc(self, n_code, w_param, l_param):
         try:
-            msg = MSG.from_address(int(message))
-            if msg.message == self.WM_HOTKEY:
-                callback = self.callbacks.get(int(msg.wParam))
-                if callback:
-                    callback()
-                    return True, 0
+            if n_code >= 0:
+                event = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                self.process_key_event(int(w_param), int(event.vkCode))
         except Exception as e:
-            print(f"Failed to handle native hotkey event: {e}")
-        return False, 0
+            print(f"Failed to handle low-level hotkey event: {e}")
+        return self.user32.CallNextHookEx(None, n_code, w_param, l_param)
+
+    def process_key_event(self, message, virtual_key):
+        if message in self.KEY_DOWN_MESSAGES:
+            self.handle_key_down(virtual_key)
+        elif message in self.KEY_UP_MESSAGES:
+            self.handle_key_up(virtual_key)
+
+    def handle_key_down(self, virtual_key):
+        modifier = self.VK_TO_MODIFIER.get(virtual_key)
+        if modifier:
+            self.active_modifiers |= modifier
+            return
+
+        hotkey = (self.active_modifiers, virtual_key)
+        if hotkey in self.callbacks and hotkey not in self.active_hotkeys:
+            self.active_hotkeys.add(hotkey)
+            for callback in list(self.callbacks[hotkey]):
+                callback()
+
+    def handle_key_up(self, virtual_key):
+        modifier = self.VK_TO_MODIFIER.get(virtual_key)
+        if modifier:
+            self.active_modifiers &= ~modifier
+            self.active_hotkeys.clear()
+            return
+
+        for hotkey in list(self.active_hotkeys):
+            if hotkey[1] == virtual_key:
+                self.active_hotkeys.discard(hotkey)
 
 def create_hotkey_manager(app):
     if sys.platform == "win32":
-        return WindowsNativeHotkeyManager(app)
+        return WindowsLowLevelHotkeyManager()
     return KeyboardHotkeyManager()
 
 class SignalManager(QObject):
