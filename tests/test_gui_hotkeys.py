@@ -11,7 +11,7 @@ from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import QApplication
 
-from gui import HotkeyEdit, SettingsWindow, TrayApplication
+from gui import HotkeyEdit, SettingsWindow, TrayApplication, parse_windows_hotkey
 
 
 class FakeRecorder:
@@ -36,6 +36,18 @@ class FakeTrayIcon:
 
     def showMessage(self, title, message, icon, duration):
         self.messages.append((title, message, icon, duration))
+
+
+class FakeHotkeyManager:
+    def __init__(self):
+        self.cleared = False
+        self.registrations = []
+
+    def clear(self):
+        self.cleared = True
+
+    def register(self, hotkey, callback):
+        self.registrations.append((hotkey, callback))
 
 
 class HotkeyEditTests(unittest.TestCase):
@@ -211,6 +223,27 @@ class HotkeyEditTests(unittest.TestCase):
         )
 
 
+class WindowsHotkeyParserTests(unittest.TestCase):
+    def test_parse_alt_shift_letter_for_register_hotkey(self):
+        self.assertEqual(parse_windows_hotkey("alt+shift+r"), (0x0001 | 0x0004, 0x52))
+
+    def test_parse_common_keys_for_register_hotkey(self):
+        cases = {
+            "ctrl+alt+plus": (0x0002 | 0x0001, 0xBB),
+            "ctrl+alt+comma": (0x0002 | 0x0001, 0xBC),
+            "ctrl+alt+-": (0x0002 | 0x0001, 0xBD),
+            "ctrl+alt+/": (0x0002 | 0x0001, 0xBF),
+            "windows+shift+f12": (0x0008 | 0x0004, 0x7B),
+        }
+
+        for hotkey, expected in cases.items():
+            with self.subTest(hotkey=hotkey):
+                self.assertEqual(parse_windows_hotkey(hotkey), expected)
+
+    def test_parse_unknown_key_returns_none(self):
+        self.assertIsNone(parse_windows_hotkey("alt+shift+unknown-key"))
+
+
 class SettingsWindowLegacyHotkeyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -271,6 +304,45 @@ class SettingsWindowLegacyHotkeyTests(unittest.TestCase):
 
 
 class TrayApplicationHotkeyTests(unittest.TestCase):
+    def test_register_hotkeys_uses_app_hotkey_manager(self):
+        hotkey_manager = FakeHotkeyManager()
+        subject = SimpleNamespace(
+            hotkey_manager=hotkey_manager,
+            settings_window=FakeSettingsWindow(
+                {
+                    "hk_mic": "alt+shift+r",
+                    "hk_loop": "ctrl+shift+l",
+                    "hk_both": "",
+                    "hk_stop": "ctrl+shift+s",
+                    "stop_with_record_hotkeys": False,
+                }
+            ),
+            toggled=[],
+            stopped=False,
+        )
+        subject.toggle_recording = lambda mode: subject.toggled.append(mode)
+        subject.stop_recording = lambda: setattr(subject, "stopped", True)
+
+        with patch("gui.keyboard.add_hotkey") as add_hotkey, patch(
+            "gui.keyboard.unhook_all_hotkeys"
+        ) as unhook_all_hotkeys:
+            TrayApplication.register_hotkeys(subject)
+
+        self.assertTrue(hotkey_manager.cleared)
+        self.assertEqual([item[0] for item in hotkey_manager.registrations], [
+            "alt+shift+r",
+            "ctrl+shift+l",
+            "ctrl+shift+s",
+        ])
+        self.assertFalse(add_hotkey.called)
+        self.assertFalse(unhook_all_hotkeys.called)
+
+        hotkey_manager.registrations[0][1]()
+        hotkey_manager.registrations[2][1]()
+
+        self.assertEqual(subject.toggled, ["mic"])
+        self.assertTrue(subject.stopped)
+
     def test_record_hotkey_stops_active_recording_when_option_enabled(self):
         subject = SimpleNamespace(
             recorder=FakeRecorder(alive=True),

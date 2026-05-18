@@ -3,12 +3,14 @@ import os
 import json
 import shutil
 import tempfile
+import ctypes
+from ctypes import wintypes
 from PyQt6.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QMainWindow, 
                              QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, 
                              QPushButton, QFileDialog, QMessageBox, QGroupBox, 
                              QLineEdit, QFormLayout, QCheckBox)
 from PyQt6.QtGui import QIcon, QAction, QColor, QPixmap, QPainter, QBrush, QKeySequence
-from PyQt6.QtCore import pyqtSignal, QObject, Qt, QUrl, QMimeData, QDir, QEvent
+from PyQt6.QtCore import pyqtSignal, QObject, Qt, QUrl, QMimeData, QDir, QEvent, QAbstractNativeEventFilter
 import soundcard as sc
 import keyboard
 from audio_recorder import AudioRecorder, get_devices
@@ -22,6 +24,148 @@ def resource_path(relative_path):
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
+
+WINDOWS_MODIFIER_KEYS = {
+    "alt": 0x0001,
+    "ctrl": 0x0002,
+    "control": 0x0002,
+    "shift": 0x0004,
+    "windows": 0x0008,
+    "win": 0x0008,
+}
+
+WINDOWS_SPECIAL_KEYS = {
+    "backspace": 0x08,
+    "tab": 0x09,
+    "enter": 0x0D,
+    "return": 0x0D,
+    "esc": 0x1B,
+    "escape": 0x1B,
+    "space": 0x20,
+    "left": 0x25,
+    "up": 0x26,
+    "right": 0x27,
+    "down": 0x28,
+    "delete": 0x2E,
+    "plus": 0xBB,
+    "comma": 0xBC,
+    "-": 0xBD,
+    "minus": 0xBD,
+    ".": 0xBE,
+    "period": 0xBE,
+    "/": 0xBF,
+    "slash": 0xBF,
+}
+
+for number in range(1, 13):
+    WINDOWS_SPECIAL_KEYS[f"f{number}"] = 0x70 + number - 1
+
+def parse_windows_hotkey(hotkey):
+    parts = [part.strip().lower() for part in (hotkey or "").split("+") if part.strip()]
+    if not parts:
+        return None
+
+    modifiers = 0
+    keys = []
+    for part in parts:
+        modifier = WINDOWS_MODIFIER_KEYS.get(part)
+        if modifier:
+            modifiers |= modifier
+        else:
+            keys.append(part)
+
+    if len(keys) != 1:
+        return None
+
+    key = keys[0]
+    if len(key) == 1 and "a" <= key <= "z":
+        virtual_key = ord(key.upper())
+    elif len(key) == 1 and "0" <= key <= "9":
+        virtual_key = ord(key)
+    else:
+        virtual_key = WINDOWS_SPECIAL_KEYS.get(key)
+
+    if not virtual_key:
+        return None
+
+    return modifiers, virtual_key
+
+class MSG(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", wintypes.HWND),
+        ("message", wintypes.UINT),
+        ("wParam", wintypes.WPARAM),
+        ("lParam", wintypes.LPARAM),
+        ("time", wintypes.DWORD),
+        ("pt", wintypes.POINT),
+    ]
+
+class KeyboardHotkeyManager:
+    def clear(self):
+        keyboard.unhook_all_hotkeys()
+
+    def register(self, hotkey, callback):
+        keyboard.add_hotkey(hotkey, callback)
+        return True
+
+class WindowsNativeHotkeyManager(QAbstractNativeEventFilter):
+    WM_HOTKEY = 0x0312
+    MOD_NOREPEAT = 0x4000
+
+    def __init__(self, app, fallback=None):
+        super().__init__()
+        self.app = app
+        self.fallback = fallback or KeyboardHotkeyManager()
+        self.callbacks = {}
+        self.next_id = 1
+        self.user32 = ctypes.windll.user32 if sys.platform == "win32" else None
+        if self.user32 is not None:
+            self.app.installNativeEventFilter(self)
+
+    def clear(self):
+        if self.user32 is not None:
+            for hotkey_id in list(self.callbacks):
+                self.user32.UnregisterHotKey(None, hotkey_id)
+            self.callbacks.clear()
+        self.fallback.clear()
+
+    def register(self, hotkey, callback):
+        parsed = parse_windows_hotkey(hotkey)
+        if self.user32 is None or parsed is None:
+            return self.fallback.register(hotkey, callback)
+
+        modifiers, virtual_key = parsed
+        hotkey_id = self.next_id
+        self.next_id += 1
+
+        registered = self.user32.RegisterHotKey(
+            None,
+            hotkey_id,
+            modifiers | self.MOD_NOREPEAT,
+            virtual_key,
+        )
+        if registered:
+            self.callbacks[hotkey_id] = callback
+            return True
+
+        return self.fallback.register(hotkey, callback)
+
+    def nativeEventFilter(self, event_type, message):
+        try:
+            msg = MSG.from_address(int(message))
+            if msg.message == self.WM_HOTKEY:
+                callback = self.callbacks.get(int(msg.wParam))
+                if callback:
+                    callback()
+                    return True, 0
+        except Exception as e:
+            print(f"Failed to handle native hotkey event: {e}")
+        return False, 0
+
+def create_hotkey_manager(app):
+    if sys.platform == "win32":
+        return WindowsNativeHotkeyManager(app)
+    return KeyboardHotkeyManager()
 
 class SignalManager(QObject):
     recording_finished = pyqtSignal(str, str)
@@ -546,6 +690,7 @@ class TrayApplication(QObject):
         
         self.settings_window = SettingsWindow()
         self.settings_window.settings_saved.connect(self.register_hotkeys)
+        self.hotkey_manager = create_hotkey_manager(self.app)
         
         self.show_tray_notification("Ready", "Left-click to toggle recording.", QSystemTrayIcon.MessageIcon.Information, 2000)
         self.register_hotkeys()
@@ -601,19 +746,25 @@ class TrayApplication(QObject):
         self.tray_icon.setContextMenu(self.menu)
 
     def register_hotkeys(self):
-        try: keyboard.unhook_all_hotkeys() # Ensure no old hotkeys are active
-        except: pass
+        hotkey_manager = getattr(self, "hotkey_manager", None)
+        if hotkey_manager is None:
+            hotkey_manager = KeyboardHotkeyManager()
+            self.hotkey_manager = hotkey_manager
+        try:
+            hotkey_manager.clear()
+        except Exception as e:
+            print(f"Failed to clear hotkeys: {e}")
         settings = self.settings_window.get_settings()
         hk_mic = settings.get("hk_mic")
         hk_loop = settings.get("hk_loop")
         hk_both = settings.get("hk_both")
         hk_stop = settings.get("hk_stop")
         try:
-            if hk_mic: keyboard.add_hotkey(hk_mic, lambda: self.toggle_recording("mic"))
-            if hk_loop: keyboard.add_hotkey(hk_loop, lambda: self.toggle_recording("loopback"))
-            if hk_both: keyboard.add_hotkey(hk_both, lambda: self.toggle_recording("both"))
+            if hk_mic: hotkey_manager.register(hk_mic, lambda: self.toggle_recording("mic"))
+            if hk_loop: hotkey_manager.register(hk_loop, lambda: self.toggle_recording("loopback"))
+            if hk_both: hotkey_manager.register(hk_both, lambda: self.toggle_recording("both"))
             if hk_stop and not settings.get("stop_with_record_hotkeys", True):
-                keyboard.add_hotkey(hk_stop, self.stop_recording)
+                hotkey_manager.register(hk_stop, self.stop_recording)
         except Exception as e: print(f"Failed to register hotkeys: {e}")
 
     def notifications_enabled(self):
@@ -730,4 +881,8 @@ class TrayApplication(QObject):
 
     def exit_app(self):
         if self.recorder: self.recorder.stop()
+        try:
+            self.hotkey_manager.clear()
+        except Exception:
+            pass
         self.app.quit()
