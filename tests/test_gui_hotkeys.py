@@ -348,6 +348,126 @@ class SettingsWindowLegacyHotkeyTests(unittest.TestCase):
         self.assertEqual(window.hk_stop.text(), "ctrl+alt+s")
 
 
+_NO_SETTINGS_JSON = object()
+
+
+class SettingsWindowOutputProfileTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def make_settings_window(self, settings=_NO_SETTINGS_JSON):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        previous_cwd = os.getcwd()
+        os.chdir(temp_dir.name)
+        self.addCleanup(os.chdir, previous_cwd)
+
+        if settings is not _NO_SETTINGS_JSON:
+            with open("settings.json", "w", encoding="utf-8") as f:
+                json.dump(settings, f)
+
+        patches = [
+            patch("gui.get_devices", return_value=[{"name": "Default Mic", "id": "mic1"}]),
+            patch("gui.sc.default_microphone", return_value=SimpleNamespace(id="mic1")),
+        ]
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        window = SettingsWindow()
+        self.addCleanup(window.close)
+        return window
+
+    def test_defaults_without_settings_json_use_flac_balanced_mono(self):
+        window = self.make_settings_window()
+
+        settings = window.get_settings()
+
+        self.assertEqual(settings["format"], "flac")
+        self.assertEqual(settings["quality"], "balanced")
+        self.assertIs(settings["stereo"], False)
+        self.assertEqual(window.lbl_preview.text(), "FLAC / 16 kHz / mono / PCM_16")
+
+    def test_legacy_uppercase_mp3_loads_as_internal_key(self):
+        window = self.make_settings_window({"format": "MP3"})
+
+        settings = window.get_settings()
+
+        self.assertEqual(settings["format"], "mp3")
+        self.assertEqual(settings["quality"], "balanced")
+        self.assertIs(settings["stereo"], False)
+        self.assertEqual(window.lbl_preview.text(), "MP3 / 16 kHz / mono / 64 kbps")
+
+    def test_lowercase_mp3_loads_as_internal_key(self):
+        window = self.make_settings_window({"format": "mp3"})
+
+        settings = window.get_settings()
+
+        self.assertEqual(settings["format"], "mp3")
+        self.assertEqual(window.lbl_preview.text(), "MP3 / 16 kHz / mono / 64 kbps")
+
+    def test_empty_format_falls_back_to_flac(self):
+        for value in ("", None):
+            with self.subTest(value=value):
+                window = self.make_settings_window({"format": value})
+
+                settings = window.get_settings()
+
+                self.assertEqual(settings["format"], "flac")
+                self.assertEqual(window.lbl_preview.text(), "FLAC / 16 kHz / mono / PCM_16")
+
+    def test_unknown_format_falls_back_to_flac(self):
+        window = self.make_settings_window({"format": "aac"})
+
+        settings = window.get_settings()
+
+        self.assertEqual(settings["format"], "flac")
+        self.assertEqual(window.lbl_preview.text(), "FLAC / 16 kHz / mono / PCM_16")
+
+    def test_unknown_or_empty_quality_falls_back_to_balanced(self):
+        for value in ("", "studio", None):
+            with self.subTest(value=value):
+                window = self.make_settings_window({"quality": value})
+
+                settings = window.get_settings()
+
+                self.assertEqual(settings["quality"], "balanced")
+                self.assertEqual(window.lbl_preview.text(), "FLAC / 16 kHz / mono / PCM_16")
+
+    def test_non_dict_settings_json_falls_back_to_defaults(self):
+        window = self.make_settings_window(None)
+
+        settings = window.get_settings()
+
+        self.assertEqual(settings["format"], "flac")
+        self.assertEqual(settings["quality"], "balanced")
+        self.assertIs(settings["stereo"], False)
+        self.assertEqual(window.lbl_preview.text(), "FLAC / 16 kHz / mono / PCM_16")
+
+    def test_string_stereo_values_are_parsed_explicitly(self):
+        for value, expected, preview in (
+            ("false", False, "FLAC / 16 kHz / mono / PCM_16"),
+            ("true", True, "FLAC / 16 kHz / stereo / PCM_16"),
+        ):
+            with self.subTest(value=value):
+                window = self.make_settings_window({"stereo": value})
+
+                settings = window.get_settings()
+
+                self.assertIs(settings["stereo"], expected)
+                self.assertEqual(window.lbl_preview.text(), preview)
+
+    def test_preview_updates_for_wav_high_quality_stereo(self):
+        window = self.make_settings_window()
+
+        window._set_combo_by_data(window.combo_fmt, "wav", "flac")
+        window._set_combo_by_data(window.combo_quality, "high", "balanced")
+        window.chk_stereo.setChecked(True)
+
+        self.assertEqual(window.lbl_preview.text(), "WAV / 48 kHz / stereo / PCM_24")
+
+
 class TrayApplicationHotkeyTests(unittest.TestCase):
     def test_register_hotkeys_uses_app_hotkey_manager(self):
         hotkey_manager = FakeHotkeyManager()

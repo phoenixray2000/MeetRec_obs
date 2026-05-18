@@ -13,7 +13,13 @@ from PyQt6.QtGui import QIcon, QAction, QColor, QPixmap, QPainter, QBrush, QKeyS
 from PyQt6.QtCore import pyqtSignal, QObject, Qt, QUrl, QMimeData, QDir, QEvent
 import soundcard as sc
 import keyboard
-from audio_recorder import AudioRecorder, get_devices
+from audio_recorder import (
+    AudioRecorder,
+    FORMAT_CONFIG,
+    QUALITY_CONFIG,
+    describe_output_profile,
+    get_devices,
+)
 from clipboard_utils import copy_file_to_clipboard
 
 CONFIG_FILE = "settings.json"
@@ -592,10 +598,26 @@ class SettingsWindow(QMainWindow):
         layout_folder_inner.addWidget(btn_browse)
         
         self.combo_fmt = QComboBox()
-        self.combo_fmt.addItems(["MP3", "WAV"])
+        for key, config in FORMAT_CONFIG.items():
+            self.combo_fmt.addItem(config["label"], key)
+
+        self.combo_quality = QComboBox()
+        for key, config in QUALITY_CONFIG.items():
+            self.combo_quality.addItem(config["label"], key)
+
+        self.chk_stereo = QCheckBox("Keep Stereo")
+        self.chk_stereo.setChecked(False)
+        self.lbl_preview = QLabel()
+
+        self.combo_fmt.currentIndexChanged.connect(self.update_output_preview)
+        self.combo_quality.currentIndexChanged.connect(self.update_output_preview)
+        self.chk_stereo.toggled.connect(self.update_output_preview)
         
         layout_out.addRow("Folder:", layout_folder_inner)
         layout_out.addRow("Format:", self.combo_fmt)
+        layout_out.addRow("Quality:", self.combo_quality)
+        layout_out.addRow("Stereo:", self.chk_stereo)
+        layout_out.addRow("Preview:", self.lbl_preview)
         group_out.setLayout(layout_out)
         layout.addWidget(group_out)
 
@@ -686,42 +708,75 @@ class SettingsWindow(QMainWindow):
         if folder:
             self.lbl_folder.setText(folder)
 
+    def _set_combo_by_data(self, combo, value, default_value):
+        normalized = str(value or default_value).strip().lower()
+        default_normalized = str(default_value or "").strip().lower()
+        idx = combo.findData(normalized)
+        if idx < 0:
+            idx = combo.findData(default_normalized)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    def _parse_bool_setting(self, value):
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in ("true", "1", "yes", "on"):
+                return True
+            if normalized in ("false", "0", "no", "off", ""):
+                return False
+        return False
+
+    def update_output_preview(self):
+        fmt = self.combo_fmt.currentData() or "flac"
+        quality = self.combo_quality.currentData() or "balanced"
+        stereo = self.chk_stereo.isChecked()
+        self.lbl_preview.setText(describe_output_profile(fmt, quality, stereo))
+
     def load_settings(self):
+        data = {}
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    
-                self.lbl_folder.setText(data.get("output_folder", os.getcwd()))
-                fmt_idx = self.combo_fmt.findText(data.get("format", "MP3"))
-                if fmt_idx >= 0: self.combo_fmt.setCurrentIndex(fmt_idx)
-                
-                saved_id = data.get("device_id")
-                if saved_id:
-                    idx = self.combo_mic.findData(saved_id)
-                    if idx >= 0: self.combo_mic.setCurrentIndex(idx)
-
-                mode = data.get("tray_click_mode", "Last Used")
-                mode_idx = self.combo_left_click.findText(mode)
-                if mode_idx >= 0: self.combo_left_click.setCurrentIndex(mode_idx)
-
-                self.chk_normalize.setChecked(data.get("normalize", False))
-                self.chk_clipboard.setChecked(data.get("clipboard", False))
-                self.chk_delete.setChecked(data.get("delete_after", False))
-                self.chk_delete.setEnabled(self.chk_clipboard.isChecked())
-                self.chk_notifications.setChecked(data.get("show_notifications", True))
-                stop_with_record_hotkeys = data.get("stop_with_record_hotkeys")
-                if stop_with_record_hotkeys is None:
-                    stop_with_record_hotkeys = not bool(data.get("hk_stop", ""))
-                self.chk_stop_with_record_hotkeys.setChecked(stop_with_record_hotkeys)
-
-                self.hk_mic.setText(data.get("hk_mic", ""))
-                self.hk_loop.setText(data.get("hk_loop", ""))
-                self.hk_both.setText(data.get("hk_both", ""))
-                self.hk_stop.setText(data.get("hk_stop", ""))
+                if not isinstance(data, dict):
+                    data = {}
             except Exception as e:
                 print(f"Error loading settings: {e}")
+
+        self.lbl_folder.setText(data.get("output_folder", os.getcwd()))
+        self._set_combo_by_data(self.combo_fmt, data.get("format"), "flac")
+        self._set_combo_by_data(self.combo_quality, data.get("quality"), "balanced")
+        self.chk_stereo.setChecked(self._parse_bool_setting(data.get("stereo")))
+
+        saved_id = data.get("device_id")
+        if saved_id:
+            idx = self.combo_mic.findData(saved_id)
+            if idx >= 0: self.combo_mic.setCurrentIndex(idx)
+
+        mode = data.get("tray_click_mode", "Last Used")
+        mode_idx = self.combo_left_click.findText(mode)
+        if mode_idx >= 0: self.combo_left_click.setCurrentIndex(mode_idx)
+
+        self.chk_normalize.setChecked(data.get("normalize", False))
+        self.chk_clipboard.setChecked(data.get("clipboard", False))
+        self.chk_delete.setChecked(data.get("delete_after", False))
+        self.chk_delete.setEnabled(self.chk_clipboard.isChecked())
+        self.chk_notifications.setChecked(data.get("show_notifications", True))
+        stop_with_record_hotkeys = data.get("stop_with_record_hotkeys")
+        if stop_with_record_hotkeys is None:
+            stop_with_record_hotkeys = not bool(data.get("hk_stop", ""))
+        self.chk_stop_with_record_hotkeys.setChecked(stop_with_record_hotkeys)
+
+        self.hk_mic.setText(data.get("hk_mic", ""))
+        self.hk_loop.setText(data.get("hk_loop", ""))
+        self.hk_both.setText(data.get("hk_both", ""))
+        self.hk_stop.setText(data.get("hk_stop", ""))
         self.update_stop_hotkey_state()
+        self.update_output_preview()
 
     def save_settings(self):
         data = self.get_settings()
@@ -737,7 +792,9 @@ class SettingsWindow(QMainWindow):
         return {
             "device_id": self.combo_mic.currentData(),
             "output_folder": self.lbl_folder.text(),
-            "format": self.combo_fmt.currentText(),
+            "format": self.combo_fmt.currentData(),
+            "quality": self.combo_quality.currentData(),
+            "stereo": self.chk_stereo.isChecked(),
             "tray_click_mode": self.combo_left_click.currentText(),
             "show_notifications": self.chk_notifications.isChecked(),
             "normalize": self.chk_normalize.isChecked(),
