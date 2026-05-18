@@ -27,8 +27,8 @@ It sits quietly in your system tray and is always ready with a single click or g
     -   **Clean Workflow:** Option to move the file to a temp folder and copy it, keeping your desktop clean.
 -   **Control:**
     -   **Global Hotkeys:** Start/Stop recording from anywhere (e.g., `Ctrl+Alt+R`).
-    -   **Tray Icon:** Left-click to toggle recording immediately.
-    -   **Visual Feedback:** Tray icon changes color when recording.
+    -   **Tray Icon:** Left-click to toggle recording immediately; right-click to open the recordings folder, settings, or exit.
+    -   **Visual Feedback:** Tray icon changes color when recording, and an optional always-on-top floating timer shows recording status with the same right-click menu.
 
 ## Installation
 
@@ -41,8 +41,9 @@ It sits quietly in your system tray and is always ready with a single click or g
 1.  **Right-click** the tray icon to open **Settings**.
 2.  Select your **Microphone**, **Output Folder**, **Format**, **Quality**, and **Stereo** preference.
 3.  Set your **Hotkeys** (optional).
+    - Disable **Show floating recording timer** if you do not want the compact always-on-top recording indicator.
 4.  **Left-click** the tray icon or use a hotkey to start recording.
-5.  Click again to stop. The file is saved and ready to use!
+5.  Click the tray icon again, use a stop hotkey, or click the floating timer to stop. The floating timer changes state immediately, then hides after 5 seconds; click it again before it hides to open the recordings folder.
 
 ## Development
 

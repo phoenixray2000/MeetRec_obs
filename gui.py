@@ -3,12 +3,13 @@ import os
 import json
 import shutil
 import tempfile
+import subprocess
 from PyQt6.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QMainWindow, 
                              QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, 
                              QPushButton, QFileDialog, QMessageBox, QGroupBox, 
                              QLineEdit, QFormLayout, QCheckBox)
 from PyQt6.QtGui import QIcon, QAction, QColor, QPixmap, QPainter, QBrush, QKeySequence
-from PyQt6.QtCore import pyqtSignal, QObject, Qt, QUrl, QMimeData, QDir
+from PyQt6.QtCore import pyqtSignal, QObject, Qt, QUrl, QMimeData, QDir, QTimer
 import soundcard as sc
 import keyboard
 from audio_recorder import (
@@ -31,6 +32,208 @@ def resource_path(relative_path):
 
 class SignalManager(QObject):
     recording_finished = pyqtSignal(str, str)
+
+
+class RecordingIndicator(QWidget):
+    FINISHED_HIDE_DELAY_MS = 5000
+
+    stop_requested = pyqtSignal()
+    open_folder_requested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(
+            parent,
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint,
+        )
+        self.elapsed_seconds = 0
+        self._drag_offset = None
+        self._press_global_pos = None
+        self._dragged = False
+        self.is_finishing = False
+        self.context_menu = None
+
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(92, 34)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setWindowTitle("Recording")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.container = QWidget(self)
+        self.container.setObjectName("recordingIndicatorContainer")
+        self.container.setStyleSheet(
+            """
+            QWidget#recordingIndicatorContainer {
+                background-color: rgba(24, 24, 24, 220);
+                border-radius: 17px;
+            }
+            """
+        )
+
+        inner_layout = QHBoxLayout(self.container)
+        inner_layout.setContentsMargins(13, 0, 13, 0)
+        inner_layout.setSpacing(8)
+
+        self.dot = QLabel(self.container)
+        self.dot.setFixedSize(9, 9)
+
+        self.timer_label = QLabel("00:00", self.container)
+        self.timer_label.setStyleSheet(
+            "color: white; font-size: 13px; font-weight: 600;"
+        )
+        self.timer_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        inner_layout.addWidget(self.dot)
+        inner_layout.addWidget(self.timer_label)
+        layout.addWidget(self.container)
+
+        self.timer = QTimer(self)
+        self.timer.setInterval(1000)
+        self.timer.timeout.connect(self.update_elapsed)
+        self.finished_hide_timer = QTimer(self)
+        self.finished_hide_timer.setSingleShot(True)
+        self.finished_hide_timer.timeout.connect(self.hide_recording)
+        self.set_recording_style()
+
+    def set_recording_style(self):
+        self.dot.setStyleSheet("background-color: #ff2d2d; border-radius: 4px;")
+        self.container.setStyleSheet(
+            """
+            QWidget#recordingIndicatorContainer {
+                background-color: rgba(24, 24, 24, 220);
+                border-radius: 17px;
+            }
+            """
+        )
+
+    def set_finished_style(self):
+        self.dot.setStyleSheet("background-color: #8a8a8a; border-radius: 4px;")
+        self.container.setStyleSheet(
+            """
+            QWidget#recordingIndicatorContainer {
+                background-color: rgba(24, 24, 24, 190);
+                border-radius: 17px;
+            }
+            """
+        )
+
+    @staticmethod
+    def format_elapsed(seconds):
+        seconds = max(0, int(seconds))
+        minutes, remaining_seconds = divmod(seconds, 60)
+        return f"{minutes:02d}:{remaining_seconds:02d}"
+
+    def show_recording(self):
+        self.finished_hide_timer.stop()
+        self.is_finishing = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.elapsed_seconds = 0
+        self.update_timer_text()
+        self.set_recording_style()
+        self.position_near_taskbar()
+        self.show()
+        self.raise_()
+        self.timer.start()
+
+    def show_finished(self, hide_after_ms=None):
+        self.timer.stop()
+        self.is_finishing = True
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.set_finished_style()
+        self.raise_()
+        delay_ms = self.FINISHED_HIDE_DELAY_MS if hide_after_ms is None else hide_after_ms
+        self.finished_hide_timer.start(delay_ms)
+
+    def hide_recording(self):
+        self.timer.stop()
+        self.finished_hide_timer.stop()
+        self.is_finishing = False
+        self.hide()
+
+    def update_elapsed(self):
+        self.elapsed_seconds += 1
+        self.update_timer_text()
+
+    def update_timer_text(self):
+        self.timer_label.setText(self.format_elapsed(self.elapsed_seconds))
+
+    def position_near_taskbar(self):
+        screen = QApplication.primaryScreen()
+        if not screen:
+            return
+        geometry = screen.availableGeometry()
+        x = geometry.right() - self.width() - 16
+        y = geometry.bottom() - self.height() - 16
+        self.move(x, y)
+
+    def request_stop(self):
+        if self.is_finishing:
+            return
+        self.stop_requested.emit()
+
+    def request_open_folder(self):
+        if self.is_finishing:
+            self.open_folder_requested.emit()
+
+    def setContextMenu(self, menu):
+        self.context_menu = menu
+
+    def contextMenuEvent(self, event):
+        if self.context_menu:
+            self.context_menu.exec(event.globalPos())
+            event.accept()
+            return
+        super().contextMenuEvent(event)
+
+    def mousePressEvent(self, event):
+        if self.is_finishing:
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            global_pos = event.globalPosition().toPoint()
+            self._press_global_pos = global_pos
+            self._drag_offset = global_pos - self.frameGeometry().topLeft()
+            self._dragged = False
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.is_finishing:
+            event.accept()
+            return
+        if self._drag_offset is not None:
+            global_pos = event.globalPosition().toPoint()
+            if self._press_global_pos is not None:
+                delta = global_pos - self._press_global_pos
+                self._dragged = self._dragged or abs(delta.x()) > 3 or abs(delta.y()) > 3
+            self.move(global_pos - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self.is_finishing:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.request_open_folder()
+            self._drag_offset = None
+            self._press_global_pos = None
+            self._dragged = False
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            if not self._dragged:
+                self.request_stop()
+            self._drag_offset = None
+            self._press_global_pos = None
+            self._dragged = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
 
 class HotkeyEdit(QLineEdit):
     """
@@ -169,6 +372,15 @@ class SettingsWindow(QMainWindow):
         group_tray.setLayout(layout_tray)
         layout.addWidget(group_tray)
 
+        # Notifications
+        group_notifications = QGroupBox("Notifications")
+        layout_notifications = QVBoxLayout()
+        self.chk_recording_indicator = QCheckBox("Show floating recording timer")
+        self.chk_recording_indicator.setChecked(True)
+        layout_notifications.addWidget(self.chk_recording_indicator)
+        group_notifications.setLayout(layout_notifications)
+        layout.addWidget(group_notifications)
+
         # Post-Processing
         group_post = QGroupBox("Post-Processing & Clipboard")
         layout_post = QVBoxLayout()
@@ -281,6 +493,12 @@ class SettingsWindow(QMainWindow):
         self.chk_clipboard.setChecked(data.get("clipboard", False))
         self.chk_delete.setChecked(data.get("delete_after", False))
         self.chk_delete.setEnabled(self.chk_clipboard.isChecked())
+        if "show_recording_indicator" in data:
+            self.chk_recording_indicator.setChecked(
+                self._parse_bool_setting(data.get("show_recording_indicator"))
+            )
+        else:
+            self.chk_recording_indicator.setChecked(True)
 
         self.hk_mic.setText(data.get("hk_mic", ""))
         self.hk_loop.setText(data.get("hk_loop", ""))
@@ -306,6 +524,7 @@ class SettingsWindow(QMainWindow):
             "quality": self.combo_quality.currentData(),
             "stereo": self.chk_stereo.isChecked(),
             "tray_click_mode": self.combo_left_click.currentText(),
+            "show_recording_indicator": self.chk_recording_indicator.isChecked(),
             "normalize": self.chk_normalize.isChecked(),
             "clipboard": self.chk_clipboard.isChecked(),
             "delete_after": self.chk_delete.isChecked(),
@@ -332,6 +551,9 @@ class TrayApplication(QObject):
         self.tray_icon = QSystemTrayIcon(QIcon(self.icon_idle_path), self.app)
         self.tray_icon.setToolTip("Simple Audio Recorder (Idle)")
         self.tray_icon.activated.connect(self.on_tray_activated)
+        self.recording_indicator = RecordingIndicator()
+        self.recording_indicator.stop_requested.connect(self.stop_recording)
+        self.recording_indicator.open_folder_requested.connect(self.open_recordings_folder)
         
         self.build_menu()
         self.tray_icon.show()
@@ -380,6 +602,8 @@ class TrayApplication(QObject):
         self.action_stop.setEnabled(False)
         self.action_settings = QAction("Settings", self)
         self.action_settings.triggered.connect(self.open_settings)
+        self.action_open_folder = QAction("Open Recordings Folder", self)
+        self.action_open_folder.triggered.connect(self.open_recordings_folder)
         self.action_exit = QAction("Exit", self)
         self.action_exit.triggered.connect(self.exit_app)
         
@@ -388,9 +612,13 @@ class TrayApplication(QObject):
         self.menu.addAction(self.action_record_both)
         self.menu.addAction(self.action_stop)
         self.menu.addSeparator()
+        self.menu.addAction(self.action_open_folder)
         self.menu.addAction(self.action_settings)
         self.menu.addAction(self.action_exit)
         self.tray_icon.setContextMenu(self.menu)
+        recording_indicator = getattr(self, "recording_indicator", None)
+        if recording_indicator:
+            recording_indicator.setContextMenu(self.menu)
 
     def register_hotkeys(self):
         try: keyboard.unhook_all_hotkeys() # Ensure no old hotkeys are active
@@ -419,6 +647,26 @@ class TrayApplication(QObject):
                 elif click_mode == "Loopback": target_mode = "loopback"
                 elif click_mode == "Both": target_mode = "both"
                 self.start_recording(target_mode)
+
+    def open_recordings_folder(self):
+        try:
+            folder = self.settings_window.get_settings().get("output_folder") or os.getcwd()
+            folder = os.path.abspath(folder)
+            if not os.path.exists(folder):
+                os.makedirs(folder, exist_ok=True)
+            if sys.platform == "win32":
+                os.startfile(folder)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as e:
+            self.tray_icon.showMessage(
+                "Error",
+                f"Failed to open recordings folder: {e}",
+                QSystemTrayIcon.MessageIcon.Critical,
+                4000,
+            )
 
     def open_settings(self):
         self.settings_window.show()
@@ -451,9 +699,16 @@ class TrayApplication(QObject):
         self.action_stop.setEnabled(True)
         self.tray_icon.setIcon(QIcon(self.icon_rec_path)) 
         self.tray_icon.setToolTip(f"Recording ({mode})...")
+        if settings.get("show_recording_indicator", True):
+            recording_indicator = getattr(self, "recording_indicator", None)
+            if recording_indicator:
+                recording_indicator.show_recording()
         self.tray_icon.showMessage("Started", f"Recording {mode}", QSystemTrayIcon.MessageIcon.NoIcon, 1000)
 
     def stop_recording(self):
+        recording_indicator = getattr(self, "recording_indicator", None)
+        if recording_indicator and recording_indicator.isVisible():
+            recording_indicator.show_finished(RecordingIndicator.FINISHED_HIDE_DELAY_MS)
         if self.recorder: self.recorder.stop()
 
     def on_recording_finished(self, path, error):
@@ -463,6 +718,9 @@ class TrayApplication(QObject):
         self.action_stop.setEnabled(False)
         self.tray_icon.setIcon(QIcon(self.icon_idle_path))
         self.tray_icon.setToolTip("Simple Audio Recorder (Idle)")
+        recording_indicator = getattr(self, "recording_indicator", None)
+        if recording_indicator and not getattr(recording_indicator, "is_finishing", False):
+            recording_indicator.hide_recording()
         self.recorder = None
         
         if error:
@@ -503,4 +761,7 @@ class TrayApplication(QObject):
 
     def exit_app(self):
         if self.recorder: self.recorder.stop()
+        recording_indicator = getattr(self, "recording_indicator", None)
+        if recording_indicator:
+            recording_indicator.hide_recording()
         self.app.quit()
