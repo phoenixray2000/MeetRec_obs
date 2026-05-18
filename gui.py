@@ -959,6 +959,8 @@ class TrayApplication(QObject):
             source_mode=mode,
             output_folder=settings['output_folder'],
             output_format=settings['format'],
+            quality=settings['quality'],
+            stereo=settings['stereo'],
             normalize=settings['normalize'],
             on_finish_callback=finish_callback
         )

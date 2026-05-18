@@ -553,6 +553,49 @@ class TrayApplicationHotkeyTests(unittest.TestCase):
         self.assertFalse(subject.stopped)
         self.assertEqual(subject.started, "both")
 
+    def test_start_recording_passes_output_profile_settings(self):
+        subject = SimpleNamespace(
+            recorder=None,
+            last_mode=None,
+            settings_window=FakeSettingsWindow(
+                {
+                    "device_id": "mic1",
+                    "output_folder": "D:/recordings",
+                    "format": "flac",
+                    "quality": "balanced",
+                    "stereo": False,
+                    "normalize": True,
+                }
+            ),
+            signals=SimpleNamespace(
+                recording_finished=SimpleNamespace(emit=lambda path, error: None)
+            ),
+            action_record_mic=SimpleNamespace(setEnabled=lambda enabled: None),
+            action_record_loop=SimpleNamespace(setEnabled=lambda enabled: None),
+            action_record_both=SimpleNamespace(setEnabled=lambda enabled: None),
+            action_stop=SimpleNamespace(setEnabled=lambda enabled: None),
+            tray_icon=SimpleNamespace(
+                setIcon=lambda icon: None,
+                setToolTip=lambda text: None,
+            ),
+            icon_rec_path="recording.ico",
+            show_tray_notification=lambda *args, **kwargs: None,
+        )
+
+        with patch("gui.QIcon"), patch("gui.AudioRecorder") as AudioRecorder:
+            TrayApplication.start_recording(subject, "mic")
+
+        AudioRecorder.assert_called_once()
+        kwargs = AudioRecorder.call_args.kwargs
+        self.assertEqual(kwargs["mic_id"], "mic1")
+        self.assertEqual(kwargs["source_mode"], "mic")
+        self.assertEqual(kwargs["output_folder"], "D:/recordings")
+        self.assertEqual(kwargs["output_format"], "flac")
+        self.assertEqual(kwargs["quality"], "balanced")
+        self.assertIs(kwargs["stereo"], False)
+        self.assertIs(kwargs["normalize"], True)
+        AudioRecorder.return_value.start.assert_called_once_with()
+
 
 class TrayApplicationNotificationTests(unittest.TestCase):
     def test_notification_is_skipped_when_disabled(self):
