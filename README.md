@@ -17,6 +17,10 @@ It sits quietly in your system tray and is always ready with a single click or g
     -   🎤 **Microphone:** Record your voice.
     -   🔊 **System Audio:** Record what you hear (Loopback).
     -   🎙️+🔊 **Both:** Record both tracks simultaneously (mixed).
+-   **Output Profiles:**
+    -   **Format:** Save recordings as WAV, FLAC, or MP3.
+    -   **Quality:** Choose Balanced for compact 16 kHz output or High Quality for 48 kHz output.
+    -   **Stereo:** Keep stereo channels when needed, or leave it off for mono recordings.
 -   **Post-Processing:**
     -   **Auto-Normalize:** Automatically adjusts volume to optimal levels after recording.
     -   **Clipboard Integration:** Automatically copies the file (or file path) to your clipboard.
@@ -36,7 +40,7 @@ It sits quietly in your system tray and is always ready with a single click or g
 ## Usage
 
 1.  **Right-click** the tray icon to open **Settings**.
-2.  Select your **Microphone** and **Output Folder**.
+2.  Select your **Microphone**, **Output Folder**, **Format**, **Quality**, and **Stereo** preference.
 3.  Set your **Hotkeys** (optional).
     - Enable **Use record hotkeys to stop recording** if you want any record hotkey to stop the active recording.
     - Disable **Show tray notifications** if you prefer silent tray operation.
