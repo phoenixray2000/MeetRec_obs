@@ -608,6 +608,15 @@ class SettingsWindow(QMainWindow):
         group_tray.setLayout(layout_tray)
         layout.addWidget(group_tray)
 
+        # Notifications
+        group_notifications = QGroupBox("Notifications")
+        layout_notifications = QVBoxLayout()
+        self.chk_notifications = QCheckBox("Show tray notifications")
+        self.chk_notifications.setChecked(True)
+        layout_notifications.addWidget(self.chk_notifications)
+        group_notifications.setLayout(layout_notifications)
+        layout.addWidget(group_notifications)
+
         # Post-Processing
         group_post = QGroupBox("Post-Processing & Clipboard")
         layout_post = QVBoxLayout()
@@ -631,9 +640,14 @@ class SettingsWindow(QMainWindow):
         self.hk_loop = HotkeyEdit()
         self.hk_both = HotkeyEdit()
         self.hk_stop = HotkeyEdit()
+        self.chk_stop_with_record_hotkeys = QCheckBox("Use record hotkeys to stop recording")
+        self.chk_stop_with_record_hotkeys.setToolTip("When enabled, pressing any record hotkey while recording stops the active recording instead of starting another mode.")
+        self.chk_stop_with_record_hotkeys.setChecked(True)
+        self.chk_stop_with_record_hotkeys.toggled.connect(self.update_stop_hotkey_state)
         layout_hotkeys.addRow("Record Mic:", self.hk_mic)
         layout_hotkeys.addRow("Record Loopback:", self.hk_loop)
         layout_hotkeys.addRow("Record Both:", self.hk_both)
+        layout_hotkeys.addRow("", self.chk_stop_with_record_hotkeys)
         layout_hotkeys.addRow("Stop Recording:", self.hk_stop)
         group_hotkeys.setLayout(layout_hotkeys)
         layout.addWidget(group_hotkeys)
@@ -643,6 +657,15 @@ class SettingsWindow(QMainWindow):
         layout.addWidget(btn_save)
 
         self.refresh_devices()
+        self.update_stop_hotkey_state()
+
+    def update_stop_hotkey_state(self):
+        use_record_hotkeys = self.chk_stop_with_record_hotkeys.isChecked()
+        self.hk_stop.setEnabled(not use_record_hotkeys)
+        if use_record_hotkeys:
+            self.hk_stop.setPlaceholderText("Using record hotkeys")
+        else:
+            self.hk_stop.setPlaceholderText("Click to set hotkey...")
 
     def refresh_devices(self):
         self.combo_mic.clear()
@@ -686,6 +709,11 @@ class SettingsWindow(QMainWindow):
                 self.chk_clipboard.setChecked(data.get("clipboard", False))
                 self.chk_delete.setChecked(data.get("delete_after", False))
                 self.chk_delete.setEnabled(self.chk_clipboard.isChecked())
+                self.chk_notifications.setChecked(data.get("show_notifications", True))
+                stop_with_record_hotkeys = data.get("stop_with_record_hotkeys")
+                if stop_with_record_hotkeys is None:
+                    stop_with_record_hotkeys = not bool(data.get("hk_stop", ""))
+                self.chk_stop_with_record_hotkeys.setChecked(stop_with_record_hotkeys)
 
                 self.hk_mic.setText(data.get("hk_mic", ""))
                 self.hk_loop.setText(data.get("hk_loop", ""))
@@ -693,6 +721,7 @@ class SettingsWindow(QMainWindow):
                 self.hk_stop.setText(data.get("hk_stop", ""))
             except Exception as e:
                 print(f"Error loading settings: {e}")
+        self.update_stop_hotkey_state()
 
     def save_settings(self):
         data = self.get_settings()
@@ -710,9 +739,11 @@ class SettingsWindow(QMainWindow):
             "output_folder": self.lbl_folder.text(),
             "format": self.combo_fmt.currentText(),
             "tray_click_mode": self.combo_left_click.currentText(),
+            "show_notifications": self.chk_notifications.isChecked(),
             "normalize": self.chk_normalize.isChecked(),
             "clipboard": self.chk_clipboard.isChecked(),
             "delete_after": self.chk_delete.isChecked(),
+            "stop_with_record_hotkeys": self.chk_stop_with_record_hotkeys.isChecked(),
             "hk_mic": self.hk_mic.text(),
             "hk_loop": self.hk_loop.text(),
             "hk_both": self.hk_both.text(),
@@ -744,7 +775,7 @@ class TrayApplication(QObject):
         self.settings_window.settings_saved.connect(self.register_hotkeys)
         self.hotkey_manager = create_hotkey_manager(self.app)
         
-        self.tray_icon.showMessage("Ready", "Left-click to toggle recording.", QSystemTrayIcon.MessageIcon.Information, 2000)
+        self.show_tray_notification("Ready", "Left-click to toggle recording.", QSystemTrayIcon.MessageIcon.Information, 2000)
         self.register_hotkeys()
 
     def generate_icons(self):
@@ -812,11 +843,32 @@ class TrayApplication(QObject):
         hk_both = settings.get("hk_both")
         hk_stop = settings.get("hk_stop")
         try:
-            if hk_mic: hotkey_manager.register(hk_mic, lambda: self.start_recording("mic"))
-            if hk_loop: hotkey_manager.register(hk_loop, lambda: self.start_recording("loopback"))
-            if hk_both: hotkey_manager.register(hk_both, lambda: self.start_recording("both"))
-            if hk_stop: hotkey_manager.register(hk_stop, self.stop_recording)
+            if hk_mic: hotkey_manager.register(hk_mic, lambda: self.toggle_recording("mic"))
+            if hk_loop: hotkey_manager.register(hk_loop, lambda: self.toggle_recording("loopback"))
+            if hk_both: hotkey_manager.register(hk_both, lambda: self.toggle_recording("both"))
+            if hk_stop and not settings.get("stop_with_record_hotkeys", True):
+                hotkey_manager.register(hk_stop, self.stop_recording)
         except Exception as e: print(f"Failed to register hotkeys: {e}")
+
+    def notifications_enabled(self):
+        try:
+            return self.settings_window.get_settings().get("show_notifications", True)
+        except Exception:
+            return True
+
+    def show_tray_notification(self, title, message, icon=QSystemTrayIcon.MessageIcon.Information, duration=2000):
+        notifications_enabled = getattr(self, "notifications_enabled", lambda: TrayApplication.notifications_enabled(self))
+        if notifications_enabled():
+            self.tray_icon.showMessage(title, message, icon, duration)
+
+    def toggle_recording(self, mode="mic"):
+        if self.recorder and self.recorder.is_alive():
+            settings = self.settings_window.get_settings()
+            if settings.get("stop_with_record_hotkeys", True):
+                self.stop_recording()
+            return
+
+        self.start_recording(mode)
 
     def on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -860,7 +912,7 @@ class TrayApplication(QObject):
         self.action_stop.setEnabled(True)
         self.tray_icon.setIcon(QIcon(self.icon_rec_path)) 
         self.tray_icon.setToolTip(f"Recording ({mode})...")
-        self.tray_icon.showMessage("Started", f"Recording {mode}", QSystemTrayIcon.MessageIcon.NoIcon, 1000)
+        self.show_tray_notification("Started", f"Recording {mode}", QSystemTrayIcon.MessageIcon.NoIcon, 1000)
 
     def stop_recording(self):
         if self.recorder: self.recorder.stop()
@@ -875,7 +927,7 @@ class TrayApplication(QObject):
         self.recorder = None
         
         if error:
-            self.tray_icon.showMessage("Error", f"Recording failed: {error}", QSystemTrayIcon.MessageIcon.Critical, 4000)
+            self.show_tray_notification("Error", f"Recording failed: {error}", QSystemTrayIcon.MessageIcon.Critical, 4000)
             return
             
         settings = self.settings_window.get_settings()
@@ -908,7 +960,7 @@ class TrayApplication(QObject):
             except Exception as e:
                 msg += f"\nClipboard/Move error: {e}"
 
-        self.tray_icon.showMessage("Finished", msg, QSystemTrayIcon.MessageIcon.Information, 2000)
+        self.show_tray_notification("Finished", msg, QSystemTrayIcon.MessageIcon.Information, 2000)
 
     def exit_app(self):
         if self.recorder: self.recorder.stop()
